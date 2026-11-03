@@ -1,0 +1,13 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+node_modules/
+npm-debug.log*
+
+# Generated book files
+*.docx
+*.pdf
+ch1/build.js
+ch3/build.js
+
