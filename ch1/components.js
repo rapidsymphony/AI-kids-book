@@ -17,7 +17,7 @@ const C = {
   ink: "2B2D42", soft: "5C6070", navy: "0E1B33", white: "FFFFFF", line: "D9DCE3",
   tintBlue: "E8F0FA", tintTeal: "E2F3F4", tintOrange: "FDEFE2", tintGold: "FFF3D1", tintGreen: "E6F2EA", tintPurple: "EFEAF6",
 };
-const F = { head: "Baloo 2", body: "Andika", hand: "Caveat", mono: "Courier New" };
+const F = { head: "Baloo 2", body: "Andika", hand: "Caveat", mono: "JetBrains Mono", sym: "DejaVu Sans" }; // all bundled in fonts/
 const TW = 9360; // 6.5in text width
 const NONE = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
 const NB = { top: NONE, bottom: NONE, left: NONE, right: NONE, insideHorizontal: NONE, insideVertical: NONE };
@@ -25,15 +25,22 @@ const box = (color, size = 12, style = BorderStyle.SINGLE) => { const b = { styl
 const shade = (fill) => ({ type: ShadingType.CLEAR, fill, color: "auto" });
 
 // ---------------- primitives ----------------
-const r = (text, o = {}) => new TextRun({ text, font: o.font || F.body, size: o.size || 24, color: o.color || C.ink, bold: o.bold, italics: o.italics, characterSpacing: o.sp, shading: o.shading, break: o.br });
+// Symbols that Baloo/Andika/Caveat lack (they used to fall back to Inter / an emoji font) are set in bundled DejaVu Sans.
+const SYM = /([→↓◆○●★☆⚡✓])/;
+const run1 = (text, o, font) => { const t = new TextRun({ text, font, size: o.size || 24, color: o.color || C.ink, bold: o.bold, italics: o.italics, characterSpacing: o.sp, shading: o.shading, break: o.br }); t.__t = text; return t; };
+const r = (text, o = {}) => {
+  if (!SYM.test(text) || o.font === F.mono) return run1(text, o, o.font || F.body);
+  return text.split(SYM).filter((s) => s !== "").map((s, i) => run1(s, { ...o, br: i === 0 ? o.br : undefined }, SYM.test(s) ? F.sym : (o.font || F.body)));
+};
+const flat = (x) => [x].flat(4);
 function p(runs, o = {}) {
   return new Paragraph({
-    children: Array.isArray(runs) ? runs : [runs], style: o.style, heading: o.heading, alignment: o.align,
+    children: flat(runs), style: o.style, heading: o.heading, alignment: o.align,
     spacing: { before: o.before || 0, after: o.after ?? 120, line: o.line || 300, lineRule: o.exact ? "exact" : undefined },
     indent: o.indent, keepNext: o.keepNext, keepLines: o.keepLines, pageBreakBefore: o.pageBreak, tabStops: o.tabs,
   });
 }
-const gap = (pt = 8) => new Paragraph({ children: [], spacing: { before: 0, after: 0, line: pt * 20, lineRule: "exact" } });
+const gap = (pt = 8) => { const g = new Paragraph({ children: [], spacing: { before: 0, after: 0, line: pt * 20, lineRule: "exact" } }); g.__gap = true; return g; };
 const ALT = {}; // alt text / names for images that are meant to be swapped later
 const image = (file, w, type) => {
   const isArt = file.startsWith("art:");
@@ -90,7 +97,7 @@ function say(who, text) {
 const dialogue = (lines) => lines.flatMap(([w, t]) => say(w, t));
 
 // opener band — solid colour block inside the margins
-function opener({ label, title, color, dots, bookmark, sub, total = 3 }) {
+function opener({ label, title, color, dots, bookmark, sub, total = 3, pad = 260 }) {
   const dotRuns = dots === undefined ? [] : [r("\t"), ...[...Array(total).keys()].map((i) => r(i < dots ? "●  " : "○  ", { font: F.head, size: 22, color: i < dots ? C.gold : "FFFFFF" }))];
   const titlePara = new Paragraph({
     heading: HeadingLevel.HEADING_1, spacing: { before: 60, after: sub ? 40 : 0, line: 720, lineRule: "exact" },
@@ -100,7 +107,7 @@ function opener({ label, title, color, dots, bookmark, sub, total = 3 }) {
     p([r(` ${label} `, { font: F.head, size: 19, bold: true, color: C.navy, sp: 30, shading: shade(C.gold) }), ...dotRuns], { after: 0, line: 340, exact: true, tabs: [{ type: TabStopType.RIGHT, position: TW - 760 }] }),
     titlePara,
     ...(sub ? [p(r(sub, { font: F.hand, size: 32, color: "FFE7A3" }), { after: 0, line: 420, exact: true })] : []),
-  ], { w: TW, fill: color, m: { top: 260, bottom: 260, left: 380, right: 380 } })]]), gap(14)];
+  ], { w: TW, fill: color, m: { top: pad, bottom: pad, left: 380, right: 380 } })]]), gap(14)];
 }
 
 // labelled card (Newton's notebook)

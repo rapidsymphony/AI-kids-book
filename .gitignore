@@ -11,3 +11,5 @@ npm-debug.log*
 ch1/build.js
 ch3/build.js
 
+ch1/.cal/
+*.tmp

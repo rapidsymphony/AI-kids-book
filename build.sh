@@ -4,7 +4,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 case "${1:-}" in
-  1) cd ch1 && cat components.js content.js > build.js && node build.js ;;
+  1) [ -f art/backgrounds/bg_teal.png ] || python3 design/make_backgrounds.py art/backgrounds
+     cd ch1 && cat components.js content.js > build.js && node build.js
+     for f in *.docx; do python3 ../tools/postprocess_docx.py "$f"; python3 ../tools/make_print_pdf.py "$f"; done
+     ls -1 *.docx *.pdf; exit 0 ;;
   3) cd ch3 && cat components.js content.js > build.js && node build.js ;;
   2) cd ch2 && node build.js ;;
   2b) cd ch2 && node buildB_sunnylab.js ;;

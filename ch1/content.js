@@ -1,8 +1,84 @@
 // =========================================================================
 // CHAPTER 1 CONTENT — Design A, pictures placed where their scene happens
 // =========================================================================
-const body = [];
-const add = (...xs) => xs.forEach((x) => (Array.isArray(x) ? body.push(...x) : body.push(x)));
+// ---------------- Starry Circuits bleed layout (Nov 2026) ----------------
+// Page = 8" x 10" trim + 0.125" bleed on top, bottom and outside edge = 8.125" x 10.25".
+// Every colour block is its own docx section whose header holds the Starry Circuits background
+// (floating, behind text, anchored to the page at 0,0). Every story picture / activity sheet is its
+// own one-page section with the picture running edge to edge.
+const { Header, HorizontalPositionRelativeFrom, VerticalPositionRelativeFrom, TextWrappingType } = require("docx");
+const PW = 11700, PGH = 14760, PWI = 8.125, PHI = 10.25, EMU = 914400;
+const MARGIN = { top: 1260, bottom: 1330, left: 1080, right: 1260, header: 0, footer: 864 }; // left = inside, right = outside (mirror margins set in post-processing)
+const PIC_MARGIN = { ...MARGIN, top: 1260, bottom: 792, footer: 360 };
+const BG_DIR = ART + "backgrounds/";
+const PLACE = fs.existsSync(__dirname + "/placement.json") ? JSON.parse(fs.readFileSync(__dirname + "/placement.json", "utf8")) : {};
+const CAL = process.env.CAL !== undefined ? Number(process.env.CAL) : Infinity; // calibration: leave out pictures with order >= CAL
+const SECTIONS = [], LOG = [], PICS = []; let cur = null, picOrder = 0, pending = [];
+function textOf(o, seen = new Set()) {
+  if (!o || typeof o !== "object" || seen.has(o)) return ""; seen.add(o);
+  if (o.__t !== undefined) return o.__t;
+  if (o.constructor && o.constructor.name === "BookmarkStartAttributes") return `{#${o.root.name.value ?? o.root.name}}`;
+  return Array.isArray(o.root) ? o.root.map((c) => textOf(c, seen)).join(" ") : "";
+}
+function section(bg) { flushPics(true); cur = { bg, kind: "text", children: [] }; SECTIONS.push(cur); }
+function push(x, picId) {
+  if (!cur || cur.kind !== "text") { const bg = cur ? cur.bg : "teal"; cur = { bg, kind: "text", children: [] }; SECTIONS.push(cur); }
+  cur.children.push(x);
+  LOG.push({ i: LOG.length, sec: SECTIONS.length - 1, t: textOf(x), gap: !!x.__gap });
+  pending.forEach((pp) => pp.left--); flushPics();
+}
+const add = (...xs) => xs.forEach((x) => (Array.isArray(x) ? x.forEach((y) => push(y)) : push(x)));
+// a full-page picture that follows the scene: placed after PLACE[id] more blocks (two-pass, see tools/place_pictures.py)
+function pic(id, build) {
+  const order = picOrder++;
+  if (order >= CAL) { PICS.push({ id, order, anchor: LOG.length - 1, skipped: true }); return; }
+  pending.push({ id, order, build, anchor: LOG.length - 1, left: PLACE[id] || 0 }); flushPics();
+}
+function flushPics(all) {
+  const ready = pending.filter((pp) => all || pp.left <= 0); pending = pending.filter((pp) => !ready.includes(pp));
+  ready.forEach((pp) => {
+    if (cur && cur.kind === "text") while (cur.children.length && cur.children[cur.children.length - 1].__gap) cur.children.pop(); // no trailing gap → no blank page
+    const bg = cur ? cur.bg : "teal";
+    const sec = { bg, kind: "pic", id: pp.id, ...pp.build() };
+    SECTIONS.push(sec); cur = sec;
+    PICS.push({ id: pp.id, order: pp.order, anchor: pp.anchor, after: LOG.length - 1, sec: SECTIONS.length - 1, bm: sec.bm || null, t: sec.children.map((c) => textOf(c)).join(" ") });
+  });
+}
+function imgData(file) { const isArt = file.startsWith("art:"); const data = fs.readFileSync(isArt ? ART + file.slice(4) : MEDIA + file); const type = file.endsWith(".jpg") ? "jpg" : "png"; return { data, type, ...dims(data, type) }; }
+function floatImg(file, wIn, hIn, xIn, yIn, behind, vRel = VerticalPositionRelativeFrom.PAGE) {
+  const im = file.startsWith("bg:") ? { data: fs.readFileSync(BG_DIR + file.slice(3)), type: "png" } : imgData(file);
+  const alt = ALT[file];
+  return new ImageRun({ type: im.type, data: im.data, transformation: { width: Math.round(wIn * 96), height: Math.round(hIn * 96) },
+    ...(alt ? { altText: { name: alt.name, title: alt.name, description: alt.desc } } : {}),
+    floating: { horizontalPosition: { relative: HorizontalPositionRelativeFrom.PAGE, offset: Math.round(xIn * EMU) },
+      verticalPosition: { relative: vRel, offset: Math.round(yIn * EMU) },
+      behindDocument: behind, allowOverlap: true, lockAnchor: true, wrap: { type: TextWrappingType.NONE } } });
+}
+const bgHeader = (bg) => new Header({ children: [new Paragraph({ spacing: { after: 0, line: 20, lineRule: "exact" }, children: [floatImg(`bg:bg_${bg}.png`, PWI, PHI, 0, 0, true)] })] });
+const spacer = (tw, kids = []) => new Paragraph({ spacing: { before: 0, after: 0, line: Math.max(20, Math.round(tw)), lineRule: "exact" }, children: kids });
+const pill = (t, bm) => { const run = r(` ${t} `, { font: F.head, size: 18, bold: true, color: C.white, sp: 50, shading: shade(C.navy) }); return p(bm ? [new Bookmark({ id: bm, children: [run] })] : [run], { after: 0, line: 300, exact: true }); };
+// One page: picture edge to edge across the full bleed width.
+//  - portrait art (4:5, the new i-Nova images): fills the page; the label is a small pill over the top-left corner
+//  - square / landscape art: full width at y inches from the top; the label sits in the strip above it,
+//    if there are `below` blocks (caption, quote), the picture hangs from a spacer paragraph of its own height
+//    right under the label block, and the blocks follow in the strip under it
+function picPage({ img, label, color, crash, bm, y = 1.33, top, below = [] }) {
+  const im = imgData(img); const ar = im.h / im.w;
+  if (ar >= 1.2) {
+    const s = Math.max(PWI / im.w, PHI / im.h), w = im.w * s, h = im.h * s;
+    const head = label ? pill(label + (crash ? `  ·  SPARX CRASH COUNT  ·  ${crash}` : ""), bm) : p(bm ? [new Bookmark({ id: bm, children: [] })] : [], { after: 0, line: 20, exact: true });
+    return { bm, img, children: [head, spacer(20, [floatImg(img, w, h, (PWI - w) / 2, (PHI - h) / 2, true)])], fit: "portrait", printW: w };
+  }
+  const h = PWI * ar;
+  const head = top || [
+    p([bm ? new Bookmark({ id: bm, children: [r(label, { font: F.head, size: 18, bold: true, color, sp: 50 })] }) : r(label, { font: F.head, size: 18, bold: true, color, sp: 50 }),
+      ...(crash ? [r("\t"), r(`SPARX CRASH COUNT  ·  ${crash}`, { font: F.head, size: 18, bold: true, color: C.orange, sp: 40 })] : [])],
+      { after: 40, line: 280, exact: true, tabs: [{ type: TabStopType.RIGHT, position: TW }] }),
+    rule(color),
+  ];
+  const hang = below.length ? spacer(h * 1440 + 160, [floatImg(img, PWI, h, 0, 0.06, true, VerticalPositionRelativeFrom.PARAGRAPH)]) : spacer(20, [floatImg(img, PWI, h, 0, y, true)]);
+  return { bm, img, children: [...head, hang, ...below], fit: "full width", printW: PWI };
+}
 const SEC = { 1: C.blue, 2: C.green, 3: C.purple, 4: C.orange };
 const label = (t, color, o = {}) => p(o.bm ? [new Bookmark({ id: o.bm, children: [r(t, { font: F.head, size: 18, bold: true, color, sp: 50 })] })] : [r(t, { font: F.head, size: 18, bold: true, color, sp: 50 })], { after: o.after ?? 40, line: 280, exact: true, pageBreak: o.pageBreak, keepNext: true, before: o.before });
 const h1 = (t, o = {}) => new Paragraph({ heading: HeadingLevel.HEADING_1, keepNext: true, spacing: { before: 0, after: 100, line: o.line || 640, lineRule: "exact" }, children: [r(t, { font: F.head, size: o.size || 48, bold: true, color: o.color || C.ink })] });
@@ -21,10 +97,10 @@ const PH = {
 };
 Object.entries(PH).forEach(([n, d]) => { ALT[`art:placeholder_${n}.png`] = { name: `IMAGE ${n} PLACEHOLDER`, desc: `Replace with Image ${n}: ${d}. Right-click > Change Picture > From a File.` }; });
 // activity sheets run 0.25in into each margin so they print as large as possible (still inside KDP/IngramSpark no-bleed limits)
-const wideImg = (file) => new Paragraph({ alignment: AlignmentType.CENTER, indent: { left: -360, right: -360 }, spacing: { after: 0 }, children: [image(file, 672)] });
-const activityPage = (n, kicker, file, bm, color) => [
-  label(kicker, color, { pageBreak: true, bm }), rule(color), wideImg(file),
-];
+// Do & Discover activity sheet: its own full-bleed page, never cropped
+const activityPage = (kicker, file, bm, color, o = {}) => pic(o.id || file, () => picPage({ img: file, label: kicker, color, bm, ...o }));
+// story picture ("Picture This"): its own full-bleed page right after the page where its scene happens
+const picture = (id, img, color, o = {}) => pic(id, () => picPage({ img, label: "PICTURE THIS", color, ...o }));
 // back-matter banner — each page gets its own colour
 const banner = (lbl, title, color, bm, sub) => opener({ label: lbl, title, color, bookmark: bm, sub });
 
@@ -34,13 +110,13 @@ function summary2({ color, tint, kicker, question, def, flow, examples, points, 
   out.push(table([TW], [[cell([
     p([bm ? new Bookmark({ id: bm, children: [r(kicker, { font: F.head, size: 18, bold: true, color: "FFFFFF", sp: 60 })] }) : r(kicker, { font: F.head, size: 18, bold: true, color: "FFFFFF", sp: 60 })], { after: 20, line: 280, exact: true }),
     p(r(question, { font: F.head, size: 40, bold: true, color: C.white }), { after: 0, line: 520, exact: true }),
-  ], { w: TW, fill: color, m: { top: 200, bottom: 200, left: 360, right: 360 } })]]));
+  ], { w: TW, fill: color, m: { top: 160, bottom: 160, left: 360, right: 360 } })]]));
   out.push(table([TW], [[cell([
     p(r("WHAT IT MEANS", { font: F.head, size: 17, bold: true, color, sp: 50 }), { after: 40, line: 260, exact: true }),
     p(def, { after: 0, line: 300 }),
-  ], { w: TW, fill: tint, m: { top: 180, bottom: 200, left: 360, right: 360 } })]]));
+  ], { w: TW, fill: tint, m: { top: 140, bottom: 160, left: 360, right: 360 } })]]));
   if (flow) { out.push(gap(10)); out.push(flow); }
-  out.push(gap(14));
+  out.push(gap(10));
   out.push(p(r("IN THE REAL WORLD", { font: F.head, size: 18, bold: true, color, sp: 50 }), { after: 80, line: 280, exact: true, keepNext: true }));
   const n = examples.length, g = 160, w = Math.floor((TW - g * (n - 1)) / n);
   const cols = []; const cells = [];
@@ -53,12 +129,12 @@ function summary2({ color, tint, kicker, question, def, flow, examples, points, 
   });
   cols[cols.length - 1] += TW - cols.reduce((a, b) => a + b, 0);
   out.push(table(cols, [cells]));
-  out.push(gap(16));
+  out.push(gap(10));
   out.push(p(r("KEY POINTS", { font: F.head, size: 18, bold: true, color, sp: 50 }), { after: 80, line: 280, exact: true, keepNext: true }));
   out.push(new Table({ width: { size: TW, type: WidthType.DXA }, columnWidths: [700, TW - 700], layout: TableLayoutType.FIXED, borders: NB,
     rows: points.map((t, i) => new TableRow({ cantSplit: true, children: [
       cell([p(r(String(i + 1), { font: F.head, size: 26, bold: true, color: C.white }), { align: AlignmentType.CENTER, after: 0, line: 340, exact: true })], { w: 700, fill: color }),
-      cell([p(md(t, { size: 22 }), { after: 0, line: 280 })], { w: TW - 700, fill: i % 2 ? "FFFFFF" : tint, m: { top: 110, bottom: 110, left: 220, right: 220 } }),
+      cell([p(md(t, { size: 22 }), { after: 0, line: 280 })], { w: TW - 700, fill: i % 2 ? "FFFFFF" : tint, m: { top: 90, bottom: 90, left: 220, right: 220 } }),
     ] })) }));
   return out;
 }
@@ -77,13 +153,21 @@ const para = (t, o = {}) => p(md(t, { size: 23 }), { after: 80, line: 290, ...o 
 const summary = (color, tint, children, bm) => card("SUMMARY OF WHAT YOU HAVE LEARNED SO FAR", color, tint, children, { cantSplit: false });
 
 // ---------------------------------------------------------------- PAGE 1 · opener
-add(p(r("HANDS-ON AI FOR KIDS", { font: F.head, size: 18, bold: true, color: C.blue, sp: 60 }), { after: 100, line: 280, exact: true }));
-add(opener({ label: "CHAPTER 1", title: "Hands-On AI for Kids", color: C.blue, sub: "An AI powered adventure with Newton, Byte & SparX" }));
-add(centerImg("art:placeholder_1.png", 540));
-add(caption("Newton, Byte and SparX meet i-Nova, the Ever-learning AI, at a lively science fair."));
+// Cover: picture edge to edge from the top bleed; title band + caption in the strip beneath it.
+// (With the final 4:5 portrait image the picture fills the page and the band sits over its calm lower fifth.)
+section("teal");
+pic("cover", () => {
+  const im = imgData("art:placeholder_1.png"), ar = im.h / im.w, portrait = ar >= 1.2;
+  const w = portrait ? Math.max(PWI, PHI / ar) : PWI, h = w * ar;
+  const kick = p([r(" HANDS-ON AI FOR KIDS ", { font: F.head, size: 18, bold: true, color: C.white, sp: 60, shading: shade(C.navy) }), ...flat([floatImg("art:placeholder_1.png", w, h, (PWI - w) / 2, portrait ? (PHI - h) / 2 : 0, true)])], { after: 0, line: 280, exact: true });
+  return { img: "art:placeholder_1.png", fit: portrait ? "portrait" : "full width", printW: w, margin: { ...PIC_MARGIN, top: 792, bottom: 720 },
+    children: [kick, spacer(portrait ? 1440 * 7.6 - 792 - 280 : 1440 * 8.1 - 792 - 280),
+      ...opener({ label: "CHAPTER 1", title: "Hands-On AI for Kids", color: C.blue, sub: "An AI powered adventure with Newton, Byte & SparX", pad: 110 }).slice(0, 1),
+      p(r("Newton, Byte and SparX meet i-Nova, the Ever-learning AI, at a lively science fair.", { size: 18, italics: true, color: C.soft, shading: portrait ? shade(C.white) : undefined }), { align: AlignmentType.CENTER, before: 60, after: 0, line: 260 })] };
+});
 
 // ---------------------------------------------------------------- PAGE 2 · Dear Reader
-add(p([new Bookmark({ id: "whatbook", children: [] })], { pageBreak: true, after: 0, line: 20, exact: true }));
+add(p([new Bookmark({ id: "whatbook", children: [] })], { after: 0, line: 20, exact: true }));
 const L = (runs, o = {}) => p(runs, { after: o.after ?? 240, line: 410, align: o.align });
 const lt = (t, o = {}) => r(t, { size: 30, ...o });
 const em1 = (t) => lt(t, { bold: true, color: C.blue });
@@ -162,7 +246,7 @@ add(table([2700, TW - 2700], [[
 ]], { borders: box(INOVA, 12) }));
 
 // ================================================================ SECTION 1
-add(pageBreakPara());
+section("blue");
 add(opener({ label: "SECTION 1", title: "The Science Fair Surprise", color: SEC[1], dots: 1, total: 4, bookmark: "s1", sub: "“One school hall, a Science Fair, a hundred questions, and an adventure Newton never saw coming!”" }));
 add(story("Newton loved science fairs, and today his school was buzzing with excitement. This year’s Great School Science Fair was extra special — the theme was *Artificial Intelligence*."));
 add(story("Newton had heard people talk about AI — but what was it, and what could it really do? Could a computer think like the Hogwarts Sorting Hat? Could a machine learn and get stronger, the way a Pokémon levels up after every battle?"));
@@ -194,7 +278,7 @@ add(panel([
   p([r("HUMAN: NEWTON.  ROBOT: BYTE.", { font: F.mono, size: 26, bold: true, color: "6EE7A8" })], { align: AlignmentType.CENTER, after: 40, line: 320, exact: true }),
   p([r("The light settled on SparX. ", { size: 22, italics: true, color: "C9D6EA" }), r("BIRD: SPARX.", { font: F.mono, size: 26, bold: true, color: "FF7A7A" })], { align: AlignmentType.CENTER, after: 0, line: 320, exact: true }),
 ]));
-add(figure({ img: "art:placeholder_2.png", width: 430, color: SEC[1] }));
+picture("pic2", "art:placeholder_2.png", SEC[1]);
 add(dialogue([
   ["SparX", "A BIRD?! I have propellers, not feathers! Here, i-Nova — study my cookie photos instead. Very me. Very important. Very adorable."],
   ["i-Nova", "Analysing… Round. Golden. Covered in spots. New conclusion: you are a spotty bird who loves snacks."],
@@ -209,7 +293,7 @@ add(table([TW], [[cell([
 ], { w: TW, fill: "FFFFFF", borders: { left: { style: BorderStyle.SINGLE, size: 24, color: "E57373" }, top: { style: BorderStyle.SINGLE, size: 4, color: C.line }, bottom: { style: BorderStyle.SINGLE, size: 4, color: C.line }, right: { style: BorderStyle.SINGLE, size: 4, color: C.line } }, m: { top: 120, bottom: 120, left: 300, right: 240 } })]]));
 
 // ================================================================ SECTION 2
-add(pageBreakPara());
+section("green");
 add(opener({ label: "SECTION 2", title: "What Is AI", color: SEC[2], dots: 2, total: 4, bookmark: "s2" }));
 add(story("Imagine you got a new puppy. On day one, it doesn’t know its name or a single trick. But every day it watches and tries, and you give a treat when it gets things right. Soon, it sits the moment you say “sit.” Nobody put “sit” inside its brain — it learned by seeing lots of examples."));
 add(story("AI learns almost the same way. AI stands for *Artificial Intelligence*: _artificial_ means made by people, and _intelligence_ means being clever enough to think, learn, and solve problems."));
@@ -224,7 +308,7 @@ add(bullet("It can even help a robot find its way across a room without crashing
 add(story("Byte projected a cluster of colourful icons into the air."));
 add(dialogue([["Byte", "That’s me — living proof! I spot patterns in thousands of examples and use them to make my best guess. Watch this."]]));
 add(story("Byte flashed three photos into the air: a robin, a sparrow, and a little blue kingfisher. Then a fourth photo appeared, hidden behind a question mark.", { before: 80 }));
-add(figure({ img: "art:placeholder_3.png", width: 400, color: SEC[2] }));
+picture("pic3", "art:placeholder_3.png", SEC[2]);
 add(dialogue([
   ["Byte", "Three of these are birds. No rulebook, no telling — just examples. Go on, put on your detective hat like Sherlock Holmes: what do you think the fourth one is?"],
   ["Newton", "...a bird?"],
@@ -243,7 +327,7 @@ add(dialogue([
   ["Byte", "Now you’re thinking. i-Nova is waiting — and so is your surprise."],
   ["i-Nova", "I am ready to learn. Also, I have decided SparX is probably a pigeon."],
 ]));
-add(figure({ img: "art:placeholder_4.png", width: 430, color: SEC[2] }));
+picture("pic4", "art:placeholder_4.png", SEC[2]);
 add(notebook("Try this: teach somebody how to spot a bird — without using the word “bird”. Examples are easier than rules, every time."));
 add(quote("BYTE SAYS", "Byte", "AI follows patterns from the examples it was shown. Better examples help it make better guesses.", "Byte"));
 add(missionMeter("CHALLENGE METER", "i-NOVA TRAINING", 1, "You found the right kind of clue: AI learns patterns from examples, not rules or cookie photos. Challenge step 1 complete."));
@@ -253,12 +337,11 @@ add(summary2({ color: SEC[2], tint: C.tintGreen, kicker: "YOUR TURN 1  ·  SUMMA
   examples: ["Voice Assistants like Siri on iPhone and Alexa", "Chatbots like ChatGPT", "Self-driving cars"],
   points: ["AI helps machines perform human like tasks", "AI learns from data and patterns and improves over time", "AI is used in many real-world applications – Face recognition, Self driving cars", "AI does not replace humans, but assists them in making better decisions"],
 }));
-add(activityPage(2, "SECTION 2  ·  DO & DISCOVER  ·  YOUR TURN 1", "image5.jpg", null, SEC[2]));
-add(gap(18));
-add(quote("SPARX-ISM", "SparX", "My logic level is 2%. My enthusiasm level is 200%."));
+activityPage("SECTION 2  ·  DO & DISCOVER  ·  YOUR TURN 1", "image5.jpg", null, SEC[2], {
+  below: quote("SPARX-ISM", "SparX", "My logic level is 2%. My enthusiasm level is 200%.").slice(0, 1) });
 
 // ================================================================ SECTION 3
-add(pageBreakPara());
+section("purple");
 add(opener({ label: "SECTION 3", title: "How AI Learns", color: SEC[3], dots: 3, total: 4, bookmark: "s3" }));
 add(story("Newton had decided to train i-Nova to recognise SparX — challenge accepted! He already knew an AI learns by spotting patterns in examples, a bit like Spider-Man feeling his spider-sense tingle when danger is near. But what happened after i-Nova spotted its clues? Newton was about to find out.", { after: 200 }));
 const io = (head, text, col, tint) => cell([
@@ -280,7 +363,7 @@ add(dialogue([
   ["Byte", "All the time, just like people. The difference is it learns from every mistake and slowly gets better. Watch — I’ll show you how i-Nova learns, the way you’d teach a new puppy."],
 ]));
 add(story("Byte spread ten photos of cats across the table — big cats, tiny kittens, a fluffy one, even a grumpy cat wearing a tiny hat.", { before: 80 }));
-add(figure({ img: "image6.png", width: 450, color: SEC[3] }));
+picture("cats", "image6.png", SEC[3]);
 add(dialogue([
   ["Byte", "Look at all ten. What does every single cat have?"],
   ["Newton", "Whiskers. Pointy ears. A tail. Four legs. And eyes that say they own the place — like Garfield judging the whole room."],
@@ -304,8 +387,7 @@ add(notebook("Look at five photos of your family. What do all five have in commo
 add(missionMeter("CHALLENGE METER", "i-NOVA TRAINING", 2, "You traced i-Nova’s learning path: input, learning, output — and spotted how bad examples create bias. Challenge step 2 complete."));
 add(gap(12));
 add(quote("SPARX-ISM", "SparX", "If you never mess up, you’re not trying hard enough. Trust me, I’m a professional mess-upper.", "SparX-ism"));
-add(activityPage(3, "SECTION 3  ·  DO & DISCOVER  ·  YOUR TURN 2", "image7.png", "yt2", SEC[3]));
-add(pageBreakPara());
+activityPage("SECTION 3  ·  DO & DISCOVER  ·  YOUR TURN 2", "image7.png", "yt2", SEC[3]);
 add(summary2({ color: SEC[3], tint: C.tintPurple, kicker: "YOUR TURN 2  ·  SUMMARY", question: "How Does AI Learn?",
   def: md("AI learns by looking at lots of examples and finding the patterns they share. This is called *training*. Every time an AI works, it follows three steps:", { size: 23, accent: SEC[3] }),
   flow: table([2900, 330, 2900, 330, 2900], [[
@@ -318,7 +400,7 @@ add(summary2({ color: SEC[3], tint: C.tintPurple, kicker: "YOUR TURN 2  ·  SUMM
 }));
 
 // ================================================================ SECTION 4
-add(pageBreakPara());
+section("orange");
 add(opener({ label: "SECTION 4", title: "How to Talk to AI (Prompting)", color: SEC[4], dots: 4, total: 4, bookmark: "s4" }));
 add(story("Newton had figured out how an AI learns. Now he faced a trickier challenge: getting the AI to understand exactly what he meant. It was a little like casting a spell at Hogwarts — say the words wrong, and you might end up with something very different from what you pictured."));
 add(story("The cat examples had shown Newton how an AI learns. Now Byte turned to i-Nova. A *prompt* is the instruction you give an AI, and here’s the secret: *an AI does what you say, not what you mean.* Ask in a fuzzy way and you get a fuzzy answer. Ask clearly, and it can amaze you."));
@@ -329,7 +411,7 @@ add(dialogue([
 ]));
 add(story("i-Nova closed its eyes. The pages of its glowing book flipped all by themselves — and a large, round, chocolate-chip spaceship shimmered into the air.", { before: 80 }));
 add(dialogue([["i-Nova", "Behold. A spaceship. I am 99% sure."]]));
-add(figure({ img: "art:placeholder_5.png", width: 400, color: SEC[4] }));
+picture("pic5", "art:placeholder_5.png", SEC[4]);
 add(dialogue([
   ["SparX", "Ooh — is that a flying cookie? It’s beautiful. I love it. Can we keep it? I’ll call him Crumbs and love him forever, like Toothless."],
   ["Newton", "Byte, why did it draw a cookie with wings?"],
@@ -367,7 +449,7 @@ add(summary2({ color: SEC[4], tint: C.tintOrange, kicker: "YOUR TURN 3  ·  SUMM
 }));
 
 // ================================================================ BACK MATTER
-add(pageBreakPara());
+section("teal");
 add(banner("CHAPTER 1  ·  SUMMARY", "Everything You Learned", C.teal, "learned"));
 const learnItem = (n, title, runs, col, extra = []) => [table([900, TW - 900], [[
   cell([p(r(String(n), { font: F.head, size: 44, bold: true, color: C.white }), { align: AlignmentType.CENTER, after: 0, line: 560, exact: true })], { w: 900, fill: col, va: VerticalAlign.TOP, m: { top: 120, bottom: 0, left: 0, right: 0 } }),
@@ -448,10 +530,10 @@ add(card("PATTERN DETECTIVE", C.purple, C.tintPurple, [
 ]));
 
 // ---------- amazing facts
-add(pageBreakPara());
-add(banner("TRUE STORIES", "Amazing AI Facts", C.navy, "facts"));
+add(gap(10));
+add(banner("TRUE STORIES", "Amazing AI Facts", C.navy));
 add(intro("Every one of these really happened. Some of them are still happening right now."));
-add(centerImg("image8.png", 470));
+pic("facts", () => picPage({ img: "image8.png", bm: "facts" }));
 
 // ---------- answers
 add(pageBreakPara());
@@ -498,14 +580,11 @@ add(new Table({
 }));
 
 // ---------- parents' corner
-add(pageBreakPara());
-add(banner("A QUICK GUIDE FOR GROWN-UPS", "Parents’ Corner", C.blue, "parents"));
-add(centerImg("image9.jpg", 600));
-add(caption("A grown-up helps Newton connect creativity, privacy and thoughtful design."));
-add(quote("BYTE SAYS", "Byte", "Curiosity grows best when children feel safe to ask, test, laugh, rethink, and try again."));
+pic("parents", () => picPage({ img: "image9.jpg",
+  top: [opener({ label: "A QUICK GUIDE FOR GROWN-UPS", title: "Parents’ Corner", color: C.blue, bookmark: "parents", pad: 160 })[0]],
+  below: [caption("A grown-up helps Newton connect creativity, privacy and thoughtful design."), ...quote("BYTE SAYS", "Byte", "Curiosity grows best when children feel safe to ask, test, laugh, rethink, and try again.").slice(0, 1)] }));
 
 // ---------- next up
-add(pageBreakPara());
 add(banner("NEXT UP  ·  CHAPTER 2", "The Glowing Boxes", C.orange));
 add(story("Newton slid the drone photos into his backpack. He understood examples, training, bias and prompt power — but Byte pointed to one more display across the science fair."));
 add(story("Four glowing boxes shone inside one another, from the biggest blue frame to the smallest purple square. Before they trained i-Nova, Byte wanted Newton to see where it fitted in the AI family.", { after: 220 }));
@@ -516,23 +595,30 @@ add(table([TW], [[cell([
 add(p(r("END OF CHAPTER 1", { font: F.head, size: 20, bold: true, color: C.soft, sp: 80 }), { align: AlignmentType.CENTER, before: 320, after: 0, line: 300 }));
 
 // =========================================================================
-const footer = new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [
+flushPics(true);
+const mkFooter = () => new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [
   r("Hands-On AI for Kids  ·  Chapter 1  ·  ", { font: F.head, size: 17, color: "8A8FA3" }),
   new TextRun({ children: [PageNumber.CURRENT], font: F.head, size: 18, bold: true, color: C.blue }),
 ] })] });
+const blankFooter = () => new Footer({ children: [new Paragraph({ spacing: { before: 0, after: 0, line: 20, lineRule: "exact" }, children: [] })] }); // picture pages carry no folio
+const docSections = SECTIONS.filter((sec) => sec.children.length).map((sec, i) => ({
+  properties: { page: { size: { width: PW, height: PGH }, margin: sec.margin || (sec.kind === "pic" ? PIC_MARGIN : MARGIN), ...(i === 0 ? { pageNumbers: { start: 1 } } : {}) } },
+  headers: { default: bgHeader(sec.bg) },
+  footers: { default: sec.kind === "pic" ? blankFooter() : mkFooter() },
+  children: sec.children,
+}));
 const doc = new Document({
   creator: "Hands-On AI for Kids", title: "Chapter 1 · Welcome to AI World", description: "Hands-On AI for Kids — Chapter 1",
-  numbering: { config: [{ reference: "bul", levels: [{ level: 0, format: LevelFormat.BULLET, text: "●", alignment: AlignmentType.LEFT, style: { run: { color: C.gold, size: 18 }, paragraph: { indent: { left: 400, hanging: 280 } } } }] }] },
+  numbering: { config: [{ reference: "bul", levels: [{ level: 0, format: LevelFormat.BULLET, text: "●", alignment: AlignmentType.LEFT, style: { run: { color: C.gold, size: 18, font: F.sym }, paragraph: { indent: { left: 400, hanging: 280 } } } }] }] },
   styles: {
     default: { document: { run: { font: F.body, size: 24, color: C.ink } } },
     paragraphStyles: [
       { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true, run: { font: F.head, size: 56, bold: true }, paragraph: { outlineLevel: 0 } },
     ],
   },
-  sections: [{
-    properties: { page: { size: { width: 11520, height: 14400 }, margin: { top: 1080, bottom: 1150, left: 1080, right: 1080, header: 500, footer: 560 }, pageNumbers: { start: 1 } } },
-    footers: { default: footer },
-    children: body,
-  }],
+  sections: docSections,
 });
-Packer.toBuffer(doc).then((b) => { fs.writeFileSync(__dirname + "/Chapter1_Welcome_to_AI_World_v2.docx", b); console.log("ok"); });
+// calibration dump: block texts, picture positions, sections (read by tools/place_pictures.py)
+fs.mkdirSync(__dirname + "/.cal", { recursive: true });
+fs.writeFileSync(__dirname + "/.cal/blocks.json", JSON.stringify({ blocks: LOG, pics: PICS, sections: SECTIONS.map((x) => ({ bg: x.bg, kind: x.kind, id: x.id, n: x.children.length, img: x.img, fit: x.fit, printW: x.printW })) }, null, 1));
+Packer.toBuffer(doc).then((b) => { fs.writeFileSync(__dirname + "/" + (process.env.OUT || "Chapter1_Welcome_to_AI_World_v3") + ".docx", b); console.log("ok", docSections.length, "sections"); });
