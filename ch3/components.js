@@ -1,9 +1,9 @@
-// Hands-On AI for Kids — Chapter 2 — simplified "Science Fair" design system
+// Hands-On AI for Kids — shared Design A components (same as ch1/components.js)
 const fs = require("fs");
 const {
   Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell, Footer,
   AlignmentType, WidthType, BorderStyle, ShadingType, VerticalAlign, PageNumber, HeadingLevel,
-  TableLayoutType, TabStopType, Bookmark, InternalHyperlink,
+  TableLayoutType, TabStopType, Bookmark, InternalHyperlink, NoBreakHyphen,
 } = require("docx");
 
 const MEDIA = __dirname + "/media/";
@@ -25,7 +25,9 @@ const box = (color, size = 12, style = BorderStyle.SINGLE) => { const b = { styl
 const shade = (fill) => ({ type: ShadingType.CLEAR, fill, color: "auto" });
 
 // ---------------- primitives ----------------
-const r = (text, o = {}) => new TextRun({ text, font: o.font || F.body, size: o.size || 24, color: o.color || C.ink, bold: o.bold, italics: o.italics, characterSpacing: o.sp, shading: o.shading, break: o.br });
+// "i-Nova" never splits at its hyphen: Word's non-breaking hyphen keeps it on one line
+const nbParts = (text) => text.split(/(?<=i)-(?=N)|(?<=I)-(?=N)/).flatMap((s, i) => (i ? [new NoBreakHyphen(), s] : [s]));
+const r = (text, o = {}) => new TextRun({ ...(/[iI]-N/.test(text || "") ? { children: nbParts(text) } : { text }), font: o.font || F.body, size: o.size || 24, color: o.color || C.ink, bold: o.bold, italics: o.italics, characterSpacing: o.sp, shading: o.shading, break: o.br });
 function p(runs, o = {}) {
   return new Paragraph({
     children: Array.isArray(runs) ? runs : [runs], style: o.style, heading: o.heading, alignment: o.align,
@@ -34,13 +36,15 @@ function p(runs, o = {}) {
   });
 }
 const gap = (pt = 8) => new Paragraph({ children: [], spacing: { before: 0, after: 0, line: pt * 20, lineRule: "exact" } });
+const ALT = {}; // alt text / names for images that are meant to be swapped later
 const image = (file, w, type) => {
   const isArt = file.startsWith("art:");
   const data = fs.readFileSync(isArt ? ART + file.slice(4) : MEDIA + file);
   const t = type || (file.endsWith(".jpg") ? "jpg" : "png");
   // read dimensions
   const { w: iw, h: ih } = dims(data, t);
-  return new ImageRun({ type: t, data, transformation: { width: w, height: Math.round(w * ih / iw) } });
+  const alt = ALT[file];
+  return new ImageRun({ type: t, data, transformation: { width: w, height: Math.round(w * ih / iw) }, ...(alt ? { altText: { name: alt.name, title: alt.name, description: alt.desc } } : {}) });
 };
 function dims(buf, t) {
   if (t === "png") return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
@@ -51,7 +55,7 @@ const table = (cols, rows, o = {}) => new Table({ width: { size: cols.reduce((a,
 
 // story text — a run list mini-markup: *bold*, _italic_
 function md(text, base = {}) {
-  const out = []; const re = /(\*[^*]+\*|_[^_]+_)/g; let last = 0, m;
+  const out = []; const re = /(\*[^*]+\*|(?<![_\w])_[^_\s][^_]*?_(?![_\w]))/g; let last = 0, m; // underscores in blanks like "___" stay as typed
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(r(text.slice(last, m.index), base));
     const t = m[0];

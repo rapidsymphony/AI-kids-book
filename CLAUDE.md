@@ -38,7 +38,13 @@ Components (all in `components.js`, shared by ch1/ch3; ch2 has them inline in `b
   - **5 placeholders** (`ch2/media/placeholder_1..5.png`, regenerate with `python3 ch2/placeholders.py ch2/media`): 1 i-Nova "LARGE BEE", 2 i-Nova "SMALL DRONE 94%", 3 Try AI Safely sheet (Puzzle 4 fixed), 4 i-Nova opens the portal, 5 Explorer's Check sheet ("Test it on something new" replaces "My Portal Question"). Prompts: `ch2/Chapter2_Image_Prompts.md` (also lists 3 optional regenerations: nesting-box bubble, Level 1 "robot idea/prototype", Facts "moth in Section 2").
   - "i-Nova" uses Word's non-breaking hyphen in Ch2 (`r()` in `ch2/components.js`) so it never splits at line ends; Ch1 doesn't have this yet.
   - Ch3 recap still says "Newton touched a prism he was told not to touch" — no longer true after Ch1/Ch2; fix when Ch3 gets its i-Nova update.
-- **Ch3 — The Superpowers of AI** → `ch3/` (Design A, 33 pages, pictures on each section opener). 4 added refs: Hermione (S1), Ash/Pokémon (S2), Hogwarts Great Hall (S3), Hulk (S5). Also mentions "prism" a few times (leave until asked).
+- **Ch3 — The Superpowers of AI** → `ch3/` (39 pages, `ch3/Chapter3_The_Superpowers_of_AI_v2.*`). Rebuilt Nov 5 from `inputs/ch3_comments.docx` (it had **no** highlights/red notes/comments). Same components as Ch2 (`ch3/components.js` = ch2's, plus an italic regex that leaves "___" blanks alone).
+  - Prism → i-Nova (recap, S1, S2, S3) + one i-Nova bubble at the homecoming in the finale. Continuity fixes: recap retold per Ch1/Ch2; no "four o'clock lock"/prism countdown; Newton's one-stop-sign line now "test it like we tested i-Nova"; crash counts dropped (jokes kept as captions). Full list: `ch3/Chapter3_Change_List.md`.
+  - 5 refs on short lines: Hermione (S1), Ash/Pokémon (S2), Great Hall (S3), spider-sense (S4), Hulk (S5); none in the finale.
+  - Pictures inline at their scenes; "BEACON KEYS" challenge meter (0,1,2,3,3 → 5/5); summary2 summaries (S1/S2 summaries start under the meter to avoid near-empty pages); wide Do & Discover pages; coloured back-matter banners.
+  - No picture shows the Prism → no placeholders. Optional: regenerate the Superpower Map (`image2.png`, "9 crashes from Chapter 1 / 10→18" box) — prompt in `ch3/Chapter3_Image_Prompts.md`.
+  - Proofing aids: `ch3/Chapter3_Page_Text_Sheet.md` (words per page). Page PNGs: `pdftoppm -r 200 -png ch3/*.pdf out/Chapter3_page` (not committed).
+- Ignore `design/` (Starry Circuits spec: backgrounds/bleed/full-page pictures) — author put it on hold; keep Design A.
 - Author's content review of Ch2 (not yet applied, only if asked): Newton's "sitting inside all four boxes" is factually wrong (picture classifier isn't in the LLM box); Section 2 is dialogue-heavy (put the 4 safety rules in a box); Section 3 has no new AI concept; 41%/94% never explained; "Keys to free SparX" and crash-count threads don't connect.
 
 ## Build pipeline
